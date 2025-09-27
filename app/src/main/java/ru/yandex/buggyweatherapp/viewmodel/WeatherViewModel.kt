@@ -3,14 +3,13 @@ package ru.yandex.buggyweatherapp.viewmodel
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import ru.yandex.buggyweatherapp.WeatherApplication
 import ru.yandex.buggyweatherapp.model.Location
 import ru.yandex.buggyweatherapp.model.WeatherData
 import ru.yandex.buggyweatherapp.repository.LocationRepository
@@ -76,41 +75,46 @@ class WeatherViewModel : ViewModel() {
     fun getWeatherForLocation(location: Location) {
         isLoading.value = true
         error.value = null
-        
-        weatherRepository.getWeatherData(location) { data, exception ->
-            
-            Handler(Looper.getMainLooper()).post {
-                isLoading.value = false
-                
-                if (data != null) {
-                    weatherData.value = data
-                } else {
-                    error.value = exception?.message ?: "Unknown error"
+
+        viewModelScope.launch {
+            weatherRepository.getWeatherData(location) { data, exception ->
+
+                Handler(Looper.getMainLooper()).post {
+                    isLoading.value = false
+
+                    if (data != null) {
+                        weatherData.value = data
+                    } else {
+                        error.value = exception?.message ?: "Unknown error"
+                    }
                 }
             }
         }
     }
-    
+
     fun searchWeatherByCity(city: String) {
-        if (city.isBlank()) {
+        val query = city.trim()
+        if (query.isEmpty()) {
             error.value = "City name cannot be empty"
             return
         }
-        
-        isLoading.value = true
-        error.value = null
-        
-        
-        weatherRepository.getWeatherByCity(city) { data, exception ->
-            
-            isLoading.value = false
-            
-            if (data != null) {
-                weatherData.value = data
-                cityName.value = data.cityName
-                currentLocation.value = Location(0.0, 0.0, data.cityName)
-            } else {
-                error.value = exception?.message ?: "Unknown error"
+
+        viewModelScope.launch {
+            isLoading.value = true
+            error.value = null
+            try {
+                val result = weatherRepository.getWeatherByCity(query)
+                result
+                    .onSuccess { data ->
+                        weatherData.value = data
+                        cityName.value = data.cityName
+                        currentLocation.value = Location(0.0, 0.0, data.cityName)
+                    }
+                    .onFailure { e ->
+                        error.value = e.message ?: "Unknown error"
+                    }
+            } finally {
+                isLoading.value = false
             }
         }
     }
@@ -134,10 +138,12 @@ class WeatherViewModel : ViewModel() {
         refreshTimer?.scheduleAtFixedRate(object : TimerTask() {
             override fun run() {
                 currentLocation.value?.let { location ->
-                    getWeatherForLocation(location)
+                    viewModelScope.launch {
+                        getWeatherForLocation(location) // внутри обновляйте LiveData через setValue (OK на Main)
+                    }
                 }
             }
-        }, 60000, 60000)
+        }, 600, 600)
     }
     
     
@@ -152,6 +158,5 @@ class WeatherViewModel : ViewModel() {
     
     override fun onCleared() {
         super.onCleared()
-        
     }
 }
